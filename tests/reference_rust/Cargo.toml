@@ -6,9 +6,8 @@ publish = false
 
 [[bin]]
 name = "sm0sh-reference-client"
-path = "main.rs"
+path = "src/main.rs"
 
 [dependencies]
 plc-comm-slmp = { git = "https://github.com/fa-yoshinobu/plc-comm-slmp-rust", rev = "32b12bdd7601c8625c8fc0d16678c188a99e15d2" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-

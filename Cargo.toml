@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.85"
 description = "Run Ubuntu commands through an SLMP 3E device mailbox"
 license = "MIT"
+autotests = false
 
 [dependencies]
 libc = "0.2"
@@ -12,7 +13,18 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "signal"] }
 
+[[test]]
+name = "contract"
+path = "tests/contract.rs"
+
+[[test]]
+name = "execution"
+path = "tests/execution.rs"
+
+[[test]]
+name = "network"
+path = "tests/network.rs"
+
 [profile.release]
 lto = "thin"
 strip = true
-
