@@ -1,0 +1,17 @@
+# Local trial. For a PLC, set bind to Ubuntu's Ethernet address and list the PLC IP.
+bind = "127.0.0.1:5000"
+transport = "tcp" # tcp, udp, both
+allowed_ips = ["127.0.0.1", "::1"]
+
+d_words = 8192
+w_words = 128
+sd_words = 8192
+command_timeout_ms = 30000
+connection_timeout_ms = 30000
+max_connections = 16
+working_directory = "."
+
+[environment]
+PATH = "/usr/local/bin:/usr/bin:/bin"
+LANG = "C.UTF-8"
+

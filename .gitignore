@@ -1,0 +1,8 @@
+/target/
+**/target/
+__pycache__/
+*.pyc
+/sm0sh.toml
+
+
+/sm0sh

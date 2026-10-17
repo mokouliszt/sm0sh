@@ -1,0 +1,17 @@
+# Set both IPs to the Ubuntu and PLC addresses before enabling the service.
+bind = "127.0.0.1:5000"
+transport = "tcp"
+allowed_ips = ["127.0.0.1"]
+d_words = 8192
+w_words = 128
+sd_words = 8192
+command_timeout_ms = 30000
+connection_timeout_ms = 30000
+max_connections = 16
+working_directory = "/var/lib/sm0sh"
+
+[environment]
+PATH = "/usr/local/bin:/usr/bin:/bin"
+LANG = "C.UTF-8"
+HOME = "/var/lib/sm0sh"
+

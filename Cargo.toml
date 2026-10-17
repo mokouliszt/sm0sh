@@ -1,0 +1,18 @@
+[package]
+name = "sm0sh"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Run Ubuntu commands through an SLMP 3E device mailbox"
+license = "MIT"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "signal"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
