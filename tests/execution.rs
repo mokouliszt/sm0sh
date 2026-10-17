@@ -106,11 +106,21 @@ async fn descendants_do_not_keep_output_open_after_parent_exit() {
     assert_eq!(result.status, Status::Success);
     assert!(start.elapsed() < Duration::from_secs(3));
     let pid: u32 = result.text.trim().parse().unwrap();
-    // A killed orphan can briefly remain as a zombie until PID 1 reaps it.
-    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        assert!(
-            stat.split_once(") ").unwrap().1.starts_with('Z'),
-            "child is still running: {stat}"
-        );
+    // A killed orphan can briefly remain running or as a zombie until PID 1 reaps it.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => {
+                let state = stat.split_once(") ").unwrap().1;
+                if state.starts_with('Z') {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    panic!("child is still running: {stat}");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(_) => break,
+        }
     }
 }
