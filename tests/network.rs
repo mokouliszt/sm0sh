@@ -251,3 +251,132 @@ async fn shutdown_waits_for_active_command_cleanup() {
         .unwrap()
         .unwrap();
 }
+
+fn block_frame(
+    command: u16,
+    subcommand: u16,
+    word_blocks: u8,
+    bit_blocks: u8,
+    blocks: &[(u16, u16, &[u16])],
+) -> Vec<u8> {
+    let mut body = vec![16, 0];
+    body.extend(command.to_le_bytes());
+    body.extend(subcommand.to_le_bytes());
+    body.extend([word_blocks, bit_blocks]);
+    for &(device, count, words) in blocks {
+        if subcommand == 2 {
+            body.extend(0u32.to_le_bytes());
+            body.extend(device.to_le_bytes());
+        } else {
+            body.extend([0, 0, 0, device as u8]);
+        }
+        body.extend(count.to_le_bytes());
+        body.extend(words.iter().flat_map(|word| word.to_le_bytes()));
+    }
+    let mut frame = vec![0x50, 0, 0, 0xff, 0xff, 3, 0];
+    frame.extend((body.len() as u16).to_le_bytes());
+    frame.extend(body);
+    frame
+}
+
+async fn exchange_block(
+    tcp: &mut TcpStream,
+    udp: &UdpSocket,
+    use_udp: bool,
+    frame: &[u8],
+) -> (u16, Vec<u8>) {
+    if !use_udp {
+        return request(tcp, frame).await;
+    }
+    udp.send(frame).await.unwrap();
+    let mut response = [0; 2048];
+    let length = tokio::time::timeout(Duration::from_secs(5), udp.recv(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&response[..7], [0xd0, 0, 0, 0xff, 0xff, 3, 0]);
+    assert_eq!(
+        length,
+        9 + u16::from_le_bytes([response[7], response[8]]) as usize
+    );
+    (
+        u16::from_le_bytes([response[9], response[10]]),
+        response[11..length].to_vec(),
+    )
+}
+
+#[tokio::test]
+async fn block_commands_execute_and_read_results_over_tcp_udp_ql_and_iqr() {
+    for use_udp in [false, true] {
+        for subcommand in [0, 2] {
+            let (address, stop, server) = start(Config {
+                transport: Transport::Both,
+                sd_words: 16,
+                ..Config::default()
+            })
+            .await;
+            let mut tcp = TcpStream::connect(address).await.unwrap();
+            let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            udp.connect(address).await.unwrap();
+            let invalid = block_frame(
+                0x1406,
+                subcommand,
+                2,
+                0,
+                &[(0xa8, 1, &[0x1234]), (0xa9, 1, &[1])],
+            );
+            assert_eq!(
+                exchange_block(&mut tcp, &udp, use_udp, &invalid).await.0,
+                0xc05b
+            );
+            assert_eq!(read_words(&mut tcp, 0xa8, 1).await, [0]);
+            for (sequence, argument) in [(1, "previous"), (2, "ok")] {
+                let (d, w) = encode(&["/bin/echo", argument], 8192, 128).unwrap();
+                let write = block_frame(
+                    0x1406,
+                    subcommand,
+                    2,
+                    1,
+                    &[
+                        (0xa8, d.len() as u16, &d),
+                        (0xb4, w.len() as u16, &w),
+                        (0x91, 1, &[1]),
+                    ],
+                );
+                assert_eq!(
+                    exchange_block(&mut tcp, &udp, use_udp, &write).await,
+                    (0, vec![])
+                );
+                let read = block_frame(
+                    0x0406,
+                    subcommand,
+                    2,
+                    1,
+                    &[(0xb5, 8, &[]), (0xa9, 16, &[]), (0x91, 1, &[])],
+                );
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let (code, data) = exchange_block(&mut tcp, &udp, use_udp, &read).await;
+                        assert_eq!(code, 0);
+                        assert_eq!(data.len(), 50);
+                        let status = u16::from_le_bytes([data[0], data[1]]);
+                        if status >= 2 {
+                            assert_eq!(status, 2);
+                            assert_eq!(u16::from_le_bytes([data[10], data[11]]), sequence);
+                            let length = u16::from_le_bytes([data[6], data[7]]) as usize;
+                            assert_eq!(&data[16..16 + length], format!("{argument}\n").as_bytes());
+                            assert!(data[16 + length..48].iter().all(|&byte| byte == 0));
+                            assert_eq!(&data[48..], [2, 0]);
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+            stop.send(true).unwrap();
+            server.await.unwrap().unwrap();
+        }
+    }
+}

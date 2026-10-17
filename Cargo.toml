@@ -18,6 +18,10 @@ name = "contract"
 path = "tests/contract.rs"
 
 [[test]]
+name = "blocks"
+path = "tests/blocks.rs"
+
+[[test]]
 name = "execution"
 path = "tests/execution.rs"
 

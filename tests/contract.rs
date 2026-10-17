@@ -228,7 +228,8 @@ fn arbitrary_frames_do_not_panic() {
         if length >= 15 {
             data[..2].copy_from_slice(&[0x50, 0]);
             data[7..9].copy_from_slice(&((length - 9) as u16).to_le_bytes());
-            data[11..13].copy_from_slice(&0x1401u16.to_le_bytes());
+            let command = [0x0401u16, 0x1401, 0x0406, 0x1406][(length / 4) % 4];
+            data[11..13].copy_from_slice(&command.to_le_bytes());
             data[13..15].copy_from_slice(&(length as u16 % 4).to_le_bytes());
         }
         let _ = protocol::decode(&data);

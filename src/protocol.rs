@@ -42,6 +42,20 @@ impl TryFrom<u16> for Device {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct ReadBlock {
+    pub device: Device,
+    pub start: usize,
+    pub count: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct WriteBlock {
+    pub device: Device,
+    pub start: usize,
+    pub words: Vec<u16>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum Operation {
     Read {
         device: Device,
@@ -59,6 +73,8 @@ pub enum Operation {
         start: usize,
         bits: Vec<bool>,
     },
+    ReadBlocks(Vec<ReadBlock>),
+    WriteBlocks(Vec<WriteBlock>),
 }
 
 pub fn body_length(header: &[u8]) -> Result<usize, EndCode> {
@@ -82,7 +98,7 @@ pub fn decode(frame: &[u8]) -> Result<Operation, EndCode> {
     }
     let command = u16::from_le_bytes([frame[11], frame[12]]);
     let subcommand = u16::from_le_bytes([frame[13], frame[14]]);
-    if command != 0x0401 && command != 0x1401 {
+    if !matches!(command, 0x0401 | 0x1401 | 0x0406 | 0x1406) {
         return Err(EndCode::UnsupportedCommand);
     }
     let (spec_size, bits) = match subcommand {
@@ -93,6 +109,12 @@ pub fn decode(frame: &[u8]) -> Result<Operation, EndCode> {
         _ => return Err(EndCode::UnsupportedCommand),
     };
     let payload = &frame[15..];
+    if matches!(command, 0x0406 | 0x1406) {
+        if bits {
+            return Err(EndCode::UnsupportedCommand);
+        }
+        return decode_blocks(payload, spec_size, command == 0x1406);
+    }
     if payload.len() < spec_size + 2 {
         return Err(EndCode::InvalidRequest);
     }
@@ -172,6 +194,80 @@ pub fn decode(frame: &[u8]) -> Result<Operation, EndCode> {
                 .collect(),
         })
     }
+}
+
+fn decode_blocks(payload: &[u8], spec_size: usize, write: bool) -> Result<Operation, EndCode> {
+    if payload.len() < 2 {
+        return Err(EndCode::InvalidRequest);
+    }
+    let word_blocks = payload[0] as usize;
+    let blocks = word_blocks + payload[1] as usize;
+    let maximum_blocks = if spec_size == 4 { 120 } else { 60 };
+    if blocks == 0 || blocks > maximum_blocks {
+        return Err(EndCode::WordPoints);
+    }
+    let mut reads = Vec::new();
+    let mut writes = Vec::new();
+    let mut cursor = 2;
+    let mut total_points = 0;
+    for index in 0..blocks {
+        let spec = payload
+            .get(cursor..cursor + spec_size + 2)
+            .ok_or(EndCode::InvalidRequest)?;
+        let (start, code) = if spec_size == 4 {
+            (
+                u32::from_le_bytes([spec[0], spec[1], spec[2], 0]),
+                spec[3] as u16,
+            )
+        } else {
+            (
+                u32::from_le_bytes(spec[..4].try_into().unwrap()),
+                u16::from_le_bytes([spec[4], spec[5]]),
+            )
+        };
+        let device = Device::try_from(code)?;
+        if (device == Device::Sm) != (index >= word_blocks) {
+            return Err(EndCode::InvalidDevice);
+        }
+        let count = u16::from_le_bytes([spec[spec_size], spec[spec_size + 1]]) as usize;
+        total_points += count;
+        if count == 0 || total_points > MAX_WORD_POINTS {
+            return Err(EndCode::WordPoints);
+        }
+        cursor += spec_size + 2;
+        if write {
+            let data = payload
+                .get(cursor..cursor + count * 2)
+                .ok_or(EndCode::InvalidRequest)?;
+            writes.push(WriteBlock {
+                device,
+                start: start as usize,
+                words: data
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .collect(),
+            });
+            cursor += count * 2;
+        } else {
+            reads.push(ReadBlock {
+                device,
+                start: start as usize,
+                count,
+            });
+        }
+    }
+    if cursor != payload.len() {
+        return Err(EndCode::InvalidRequest);
+    }
+    let overhead = if spec_size == 4 { 4 } else { 9 };
+    if write && total_points + blocks * overhead > MAX_WORD_POINTS {
+        return Err(EndCode::WordPoints);
+    }
+    Ok(if write {
+        Operation::WriteBlocks(writes)
+    } else {
+        Operation::ReadBlocks(reads)
+    })
 }
 
 pub fn response(frame: &[u8], result: Result<Vec<u8>, EndCode>) -> Vec<u8> {

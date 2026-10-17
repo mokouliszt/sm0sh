@@ -70,6 +70,10 @@ The PLC sequence of operations is as follows:
 The response to the SM0 write request only indicates acceptance. It does not wait for command completion.
 Writing to D/W or re-triggering SM0 during execution returns SLMP end code `0xCEE0`.
 
+Block Write (`1406`) can combine D, W, and SM0 in one request.
+Block Read (`0406`) can retrieve SW and a selected SD range in one response.
+See [Block Access](docs/protocol.md#block-access) for formats and limits.
+
 ## Devices
 
 | Area | Default Points | Purpose |
@@ -106,7 +110,7 @@ python3 examples/client.py --dry-run -- /bin/echo 'hello PLC'
 
 ## Scope and Operations
 
-- 3E binary frame, TCP/UDP, Batch Read `0401`, Batch Write `1401`.
+- 3E binary frame, TCP/UDP, Batch Read `0401`, Batch Write `1401`, Block Read `0406`, Block Write `1406`.
 - Q/L format `0000/0001` and iQ-R format `0002/0003` device specifications.
 - Word access for D/W/SD/SW, bit access for SM, and word access for SM0.
 - Single shared mailbox. Ensure only one client writes from D/W preparation to result retrieval.
@@ -117,7 +121,7 @@ SLMP provides no authentication or encryption for this use case. Allowed clients
 
 Over UDP, resending an SM0 ON request after a lost response may cause the command to execute again. Use TCP for operations with side effects, and verify status before deciding to re-execute when a response is uncertain.
 
-4E frames, ASCII frames, random/block access, and CPU/label operations are unsupported.
+4E frames, ASCII frames, random access, and CPU/label operations are unsupported.
 See [docs/validation.md](docs/validation.md) for validated environments and results.
 
 ## Development

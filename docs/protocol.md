@@ -8,14 +8,14 @@ This device map is specific to sm0sh. It is independent of the semantics of spec
 | --- | --- |
 | Frame | 3E binary, Request `50 00`, Response `D0 00` |
 | Transport | TCP (default), UDP, configurable to both |
-| Command | Batch Read `0x0401`, Batch Write `0x1401` |
+| Command | Batch Read `0x0401`, Batch Write `0x1401`, Block Read `0x0406`, Block Write `0x1406` |
 | Subcommand | Word `0000/0002`, Bit `0001/0003` |
 | Q/L device specification | 3-byte head number + 1-byte code |
 | iQ-R device specification | 4-byte head number + 2-byte code |
 | Code | D=`A8`, W=`B4`, SD=`A9`, SM=`91`, SW=`B5` |
 | Numerical byte order | Little-endian |
 | Bit packing | 2 points per byte. Earlier point in high nibble. 1-point write of SM0 ON is `10` |
-| Request limits | 960 points for words, 7168 points for bits. Physical memory size bounds also apply |
+| Batch request limits | 960 points for words, 7168 points for bits. Physical memory size bounds also apply |
 
 Network number, PC number, Unit I/O number, and Station number are echoed in responses.
 Frames are not routed to other stations. Standard route value is `00 FF FF 03 00`.
@@ -24,6 +24,44 @@ SLMP responses are returned immediately upon request acceptance; execution time 
 
 TCP handles fragmented and concatenated packet streams. If the full frame from header to body cannot be received within the connection timeout, the connection is closed. The connection is also closed if the header is invalid or if the body length is outside the 6–4096 byte range. If a header is valid but the request body is malformed, an SLMP end code is returned.
 UDP requires each request to be contained in a single complete datagram. Incomplete, oversized, or requests with trailing extraneous data are dropped.
+
+## Block Access
+
+Block Read (`0406`) and Block Write (`1406`) accept subcommands `0000` (Q/L) and `0002` (iQ-R).
+Subcommands `0001` and `0003` are not used for block access.
+
+The payload begins with two one-byte counts: word-device blocks, then bit-device blocks.
+Specify all word-device blocks (D/W/SD/SW) first, followed by bit-device blocks (SM).
+Each block specifies the head device number, device code, and a two-byte point count,
+using the same device specification and little-endian integers as batch access.
+Each point in an SM block represents 16 bits, not one bit.
+
+For a read, send only block specifications. The response concatenates the data of each
+block in request order, with no per-block headers. SM values are packed into 16-bit words.
+For a write, place each block's word data immediately after its specification, before
+the next block specification. SM write data is also word-packed, not nibble-packed.
+
+| Limit | Q/L (`0000`) | iQ-R (`0002`) |
+| --- | --- | --- |
+| Total blocks | 1–120 | 1–60 |
+| Total read points | At most 960 | At most 960 |
+| Write points, including block overhead | `total_points + 4 * blocks <= 960` | `total_points + 9 * blocks <= 960` |
+
+Every block must contain at least one point and fit within its allocated device area.
+These limits follow the SLMP Reference Manual, SH-080956ENG-M, sections Read Block and Write Block.
+
+Writes accept D/W and at most one SM block. That SM block must start at SM0, contain one
+word, and have the value `0x0000` or `0x0001`; SM1–SM15 remain read-only.
+All blocks are validated before any device is changed. An invalid later block rejects
+the entire write without clearing the previous result or starting a command.
+Overlapping D/W blocks are applied in request order; the last write wins.
+An SM0 request is processed after all D/W updates, so D/W staging and execution can
+share one request. Writes while SM0 is ON still return `0xCEE0`.
+
+A block read observes all requested regions under one mailbox lock. For example, SW0–SW7
+and SD0–SD951 fit in one read (960 words total). Choose the SD range before sending:
+the SW log length returned in that response cannot change the size of the same request.
+The single-mailbox execution and SD reset rules below also apply to block access.
 
 ## D and W
 

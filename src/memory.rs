@@ -2,7 +2,7 @@
 use crate::{
     command::{self, CommandSpec},
     config::Config,
-    protocol::{Device, EndCode, Operation},
+    protocol::{Device, EndCode, Operation, WriteBlock},
 };
 
 #[derive(Debug)]
@@ -72,6 +72,20 @@ impl Memory {
 
     pub fn apply(&mut self, operation: Operation) -> Result<(Vec<u8>, Option<Job>), EndCode> {
         match operation {
+            Operation::ReadBlocks(blocks) => {
+                let mut result = Vec::new();
+                for block in blocks {
+                    let (data, _) = self.apply(Operation::Read {
+                        device: block.device,
+                        start: block.start,
+                        count: block.count,
+                        bits: false,
+                    })?;
+                    result.extend(data);
+                }
+                Ok((result, None))
+            }
+            Operation::WriteBlocks(blocks) => self.write_blocks(blocks),
             Operation::Read {
                 device,
                 start,
@@ -157,6 +171,44 @@ impl Memory {
             } if bits.len() == 1 => self.trigger(bits[0]).map(|job| (Vec::new(), job)),
             Operation::WriteBits { .. } => Err(EndCode::InvalidDevice),
         }
+    }
+
+    fn write_blocks(&mut self, blocks: Vec<WriteBlock>) -> Result<(Vec<u8>, Option<Job>), EndCode> {
+        if self.sm[0] {
+            return Err(EndCode::Unavailable);
+        }
+        let mut trigger = None;
+        for block in &blocks {
+            match block.device {
+                Device::D => {
+                    checked_range(block.start, block.words.len(), self.d.len())?;
+                }
+                Device::W => {
+                    checked_range(block.start, block.words.len(), self.w.len())?;
+                }
+                Device::Sm if block.start == 0 && block.words.len() == 1 && block.words[0] <= 1 => {
+                    if trigger.replace(block.words[0] != 0).is_some() {
+                        return Err(EndCode::InvalidRequest);
+                    }
+                }
+                _ => return Err(EndCode::InvalidDevice),
+            }
+        }
+        // Validate the whole request before changing any device or accepting a job.
+        for block in blocks {
+            let target = match block.device {
+                Device::D => &mut self.d,
+                Device::W => &mut self.w,
+                Device::Sm => continue,
+                _ => unreachable!(),
+            };
+            target[block.start..block.start + block.words.len()].copy_from_slice(&block.words);
+        }
+        let job = match trigger {
+            Some(on) => self.trigger(on)?,
+            None => None,
+        };
+        Ok((Vec::new(), job))
     }
 
     fn trigger(&mut self, on: bool) -> Result<Option<Job>, EndCode> {
